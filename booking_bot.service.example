@@ -1,0 +1,16 @@
+[Unit]
+Description=Booking Telegram Bot
+After=network.target
+
+[Service]
+User=bookingbot
+Group=bookingbot
+WorkingDirectory=/opt/booking_bot
+EnvironmentFile=/opt/booking_bot/.env
+ExecStart=/opt/booking_bot/venv/bin/python /opt/booking_bot/bot.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Админ-панель</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+  <div class="container py-4">
+    <h1 class="mb-4">Админ-панель</h1>
+
+    <h3>Добавить услугу</h3>
+    <form method="post" action="{{ url_for('add_service') }}" class="row g-3 mb-4">
+      <div class="col-md-6">
+        <input type="text" name="name" class="form-control" placeholder="Название услуги" required>
+      </div>
+      <div class="col-md-4">
+        <input type="number" step="0.01" name="price" class="form-control" placeholder="Цена" required>
+      </div>
+      <div class="col-md-2">
+        <button type="submit" class="btn btn-success w-100">Добавить</button>
+      </div>
+    </form>
+
+    <h3>Услуги</h3>
+    <table class="table table-bordered table-striped">
+      <thead class="table-dark">
+        <tr>
+          <th>Название</th>
+          <th>Цена</th>
+          <th>Слоты</th>
+          <th>Удалить</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for service in services %}
+        <tr>
+          <td>{{ service[1] }}</td>
+          <td>{{ service[2] }} ₽</td>
+          <td><a href="{{ url_for('manage_slots', service_id=service[0]) }}" class="btn btn-primary btn-sm">Слоты</a></td>
+          <td><a href="{{ url_for('delete_service', service_id=service[0]) }}" class="btn btn-danger btn-sm">Удалить</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <h3 class="mt-5">Записи</h3>
+    <table class="table table-bordered table-hover">
+      <thead class="table-dark">
+        <tr>
+          <th>Пользователь</th>
+          <th>Дата</th>
+          <th>Время</th>
+          <th>Услуга</th>
+          <th>Удалить</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for booking in bookings %}
+        <tr>
+          <td>{{ booking[1] }}</td>
+          <td>{{ booking[2] }}</td>
+          <td>{{ booking[3] }}</td>
+          <td>{{ booking[4] }}</td>
+          <td><a href="{{ url_for('delete_booking', booking_id=booking[0]) }}" class="btn btn-outline-danger btn-sm">Удалить</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
