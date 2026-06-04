@@ -2,15 +2,14 @@ import sqlite3
 import logging
 import os
 import sys
-from aiogram import Bot, Dispatcher, types
+import asyncio
+from aiogram import Bot, Dispatcher, Router, F, types
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
-from aiogram.contrib.fsm_storage.memory import MemoryStorage
-from aiogram.dispatcher import FSMContext
-from aiogram.dispatcher.filters.state import State, StatesGroup
-from aiogram.utils import executor
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from datetime import datetime, timedelta
-from aiogram.dispatcher.filters import Command
-from aiogram.utils.callback_data import CallbackData
+from aiogram.filters import Command, StateFilter
 from dotenv import load_dotenv
 from database import DB_PATH, get_connection
 
@@ -25,13 +24,11 @@ try:
 except ValueError:
     sys.exit("Missing or invalid required ADMIN_ID in .env")
 
-booking_cb = CallbackData("booking", "action", "booking_id")
-
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=API_TOKEN)
-storage = MemoryStorage()
-dp = Dispatcher(bot, storage=storage)
+dp = Dispatcher(storage=MemoryStorage())
+router = Router()
 
 class Form(StatesGroup):
     select_service = State()
@@ -78,25 +75,67 @@ def init_db():
 init_db()
 
 def main_menu():
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(KeyboardButton("📅 Записаться"))
-    kb.add(KeyboardButton("📋 Мои записи"))
-    kb.add(KeyboardButton("🗑 Удалить запись"))
-    kb.add(KeyboardButton("❓ Помощь"))
-    return kb
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📅 Записаться")],
+            [KeyboardButton(text="📋 Мои записи")],
+            [KeyboardButton(text="🗑 Удалить запись")],
+            [KeyboardButton(text="❓ Помощь")],
+        ],
+        resize_keyboard=True,
+    )
 
-@dp.message_handler(commands='start')
+def service_keyboard(services):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"{name} — {price}₽", callback_data=f"service_{sid}")]
+            for sid, name, price in services
+        ] + [[InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]]
+    )
+
+def date_keyboard(today):
+    rows = [
+        [InlineKeyboardButton(text=(today + timedelta(days=i)).strftime('%Y-%m-%d'),
+                              callback_data=f"date_{(today + timedelta(days=i)).strftime('%Y-%m-%d')}")]
+        for i in range(2, 7)
+    ]
+    rows.append([
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_service"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data="cancel"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def time_keyboard(available):
+    rows = []
+    for i in range(0, len(available), 3):
+        rows.append([
+            InlineKeyboardButton(text=t, callback_data=f"time_{t}")
+            for t in available[i:i + 3]
+        ])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_date")])
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def user_delete_keyboard(rows):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"{date} {time}", callback_data=f"delete_{booking_id}")]
+            for booking_id, date, time in rows
+        ] + [[InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]]
+    )
+
+@router.message(Command("start"))
 async def start(message: types.Message):
     await message.answer("Добро пожаловать! Выберите действие:", reply_markup=main_menu())
 
-@dp.message_handler(lambda m: m.text in ["📅 Записаться", "📋 Мои записи", "🗑 Удалить запись", "❓ Помощь"], state="*")
+@router.message(F.text.in_(["📅 Записаться", "📋 Мои записи", "🗑 Удалить запись", "❓ Помощь"]))
 async def reset_state_on_menu(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
     if current_state is not None:
-        await state.finish()
+        await state.clear()
 
     if message.text == "📅 Записаться":
-        await cmd_book(message)
+        await cmd_book(message, state)
     elif message.text == "📋 Мои записи":
         await my_bookings(message)
     elif message.text == "🗑 Удалить запись":
@@ -104,8 +143,8 @@ async def reset_state_on_menu(message: types.Message, state: FSMContext):
     elif message.text == "❓ Помощь":
         await message.answer("Выберите действие из меню или напишите мне, если нужна помощь.", reply_markup=main_menu())
 
-@dp.message_handler(lambda m: m.text == "📅 Записаться")
-async def cmd_book(message: types.Message):
+@router.message(F.text == "📅 Записаться")
+async def cmd_book(message: types.Message, state: FSMContext):
     conn = get_connection()
     c = conn.cursor()
     c.execute("SELECT id, name, price FROM services ORDER BY name")
@@ -116,18 +155,14 @@ async def cmd_book(message: types.Message):
         await message.answer("Пока нет доступных услуг. Обратитесь к администратору.")
         return
 
-    kb = InlineKeyboardMarkup(row_width=1)
-    for sid, name, price in services:
-        kb.add(InlineKeyboardButton(f"{name} — {price}₽", callback_data=f"service_{sid}"))
-
-    kb.add(InlineKeyboardButton("❌ Отмена", callback_data="cancel"))
+    kb = service_keyboard(services)
 
     await message.answer("Выберите услугу:", reply_markup=kb)
-    await Form.select_service.set()
+    await state.set_state(Form.select_service)
 
-@dp.callback_query_handler(lambda c: c.data == "cancel", state="*")
+@router.callback_query(F.data == "cancel")
 async def cancel_handler(call: CallbackQuery, state: FSMContext):
-    await state.finish()
+    await state.clear()
 
     await bot.edit_message_text(chat_id=call.message.chat.id,
                                 message_id=call.message.message_id,
@@ -135,30 +170,21 @@ async def cancel_handler(call: CallbackQuery, state: FSMContext):
                                 reply_markup=None)
     await bot.send_message(call.message.chat.id, "Выберите действие:", reply_markup=main_menu())
 
-@dp.callback_query_handler(lambda c: c.data.startswith("service_"), state=Form.select_service)
+@router.callback_query(StateFilter(Form.select_service), F.data.startswith("service_"))
 async def service_chosen(call: CallbackQuery, state: FSMContext):
     service_id = int(call.data.split("service_")[1])
     await state.update_data(service_id=service_id)
 
-    kb = InlineKeyboardMarkup(row_width=2)
     today = datetime.today()
-    for i in range(2, 7):
-        day = today + timedelta(days=i)
-        date_str = day.strftime('%Y-%m-%d')
-        kb.add(InlineKeyboardButton(date_str, callback_data=f"date_{date_str}"))
-
-    kb.row(
-        InlineKeyboardButton("⬅️ Назад", callback_data="back_to_service"),
-        InlineKeyboardButton("❌ Отмена", callback_data="cancel")
-    )
+    kb = date_keyboard(today)
 
     await bot.edit_message_text(chat_id=call.message.chat.id,
                                 message_id=call.message.message_id,
                                 text="Выберите дату для записи:",
                                 reply_markup=kb)
-    await Form.select_date.set()
+    await state.set_state(Form.select_date)
 
-@dp.callback_query_handler(lambda c: c.data == "back_to_service", state=Form.select_date)
+@router.callback_query(StateFilter(Form.select_date), F.data == "back_to_service")
 async def back_to_service(call: CallbackQuery, state: FSMContext):
     await state.update_data(date=None)
     conn = get_connection()
@@ -167,19 +193,15 @@ async def back_to_service(call: CallbackQuery, state: FSMContext):
     services = c.fetchall()
     conn.close()
 
-    kb = InlineKeyboardMarkup(row_width=1)
-    for sid, name, price in services:
-        kb.add(InlineKeyboardButton(f"{name} — {price}₽", callback_data=f"service_{sid}"))
-
-    kb.add(InlineKeyboardButton("❌ Отмена", callback_data="cancel"))
+    kb = service_keyboard(services)
 
     await bot.edit_message_text(chat_id=call.message.chat.id,
                                 message_id=call.message.message_id,
                                 text="Выберите услугу:",
                                 reply_markup=kb)
-    await Form.select_service.set()
+    await state.set_state(Form.select_service)
 
-@dp.callback_query_handler(lambda c: c.data.startswith("date_"), state=Form.select_date)
+@router.callback_query(StateFilter(Form.select_date), F.data.startswith("date_"))
 async def date_chosen(call: CallbackQuery, state: FSMContext):
     date = call.data.split("date_")[1]
     data = await state.get_data()
@@ -195,7 +217,7 @@ async def date_chosen(call: CallbackQuery, state: FSMContext):
         await bot.edit_message_text(chat_id=call.message.chat.id,
                                     message_id=call.message.message_id,
                                     text="Для выбранной услуги не настроены временные слоты. Обратитесь к администратору.")
-        await state.finish()
+        await state.clear()
         return
 
     c.execute("SELECT time FROM bookings WHERE date=?", (date,))
@@ -207,23 +229,18 @@ async def date_chosen(call: CallbackQuery, state: FSMContext):
         await bot.edit_message_text(chat_id=call.message.chat.id,
                                     message_id=call.message.message_id,
                                     text=f"Все слоты заняты на {date}. Выберите другую дату.")
-        await state.finish()
+        await state.clear()
         return
 
-    kb = InlineKeyboardMarkup(row_width=3)
-    for t in available:
-        kb.insert(InlineKeyboardButton(t, callback_data=f"time_{t}"))
-
-    kb.add(InlineKeyboardButton("⬅️ Назад", callback_data="back_to_date"))
-    kb.add(InlineKeyboardButton("❌ Отмена", callback_data="cancel"))
+    kb = time_keyboard(available)
 
     await bot.edit_message_text(chat_id=call.message.chat.id,
                                 message_id=call.message.message_id,
                                 text=f"Вы выбрали дату: {date}\nТеперь выберите время:",
                                 reply_markup=kb)
-    await Form.select_time.set()
+    await state.set_state(Form.select_time)
 
-@dp.callback_query_handler(lambda c: c.data == "back_to_date", state=Form.select_time)
+@router.callback_query(StateFilter(Form.select_time), F.data == "back_to_date")
 async def back_to_date(call: CallbackQuery, state: FSMContext):
     await call.answer()
     data = await state.get_data()
@@ -236,15 +253,7 @@ async def back_to_date(call: CallbackQuery, state: FSMContext):
     await state.update_data(date=None)
 
     today = datetime.today()
-    kb = InlineKeyboardMarkup(row_width=2)
-    for i in range(2, 7):
-        date_str = (today + timedelta(days=i)).strftime('%Y-%m-%d')
-        kb.insert(InlineKeyboardButton(date_str, callback_data=f"date_{date_str}"))
-
-    kb.add(
-        InlineKeyboardButton("⬅️ Назад", callback_data="back_to_service"),
-        InlineKeyboardButton("❌ Отмена", callback_data="cancel")
-    )
+    kb = date_keyboard(today)
 
     try:
         await bot.edit_message_text(
@@ -253,13 +262,13 @@ async def back_to_date(call: CallbackQuery, state: FSMContext):
             text="Выберите дату для записи:",
             reply_markup=kb
         )
-        await Form.select_date.set()
+        await state.set_state(Form.select_date)
     except Exception as e:
         await call.message.answer("Ошибка возврата к дате.")
         print("Ошибка при возврате к дате:", e)
 
 
-@dp.callback_query_handler(lambda c: c.data.startswith("time_"), state=Form.select_time)
+@router.callback_query(StateFilter(Form.select_time), F.data.startswith("time_"))
 async def time_chosen(call: CallbackQuery, state: FSMContext):
     await call.answer()
     time = call.data.split("_",1)[1]
@@ -328,9 +337,9 @@ async def time_chosen(call: CallbackQuery, state: FSMContext):
         f"📚 Сервис: {service_name}"
     )
 
-    await state.finish()
+    await state.clear()
 
-@dp.message_handler(lambda m: m.text == "📋 Мои записи")
+@router.message(F.text == "📋 Мои записи")
 async def my_bookings(message: types.Message):
     user_id = message.from_user.id
     conn = get_connection()
@@ -354,7 +363,7 @@ async def my_bookings(message: types.Message):
         text += f"ID: {r[0]} — {r[3]}, {r[1]} в {r[2]}\n"
     await message.answer(text, reply_markup=main_menu())
 
-@dp.message_handler(lambda m: m.text == "🗑 Удалить запись")
+@router.message(F.text == "🗑 Удалить запись")
 async def delete_booking_start(message: types.Message):
     user_id = message.from_user.id
     conn = get_connection()
@@ -367,15 +376,11 @@ async def delete_booking_start(message: types.Message):
         await message.answer("У вас нет записей для удаления.", reply_markup=main_menu())
         return
 
-    kb = InlineKeyboardMarkup(row_width=1)
-    for row in rows:
-        kb.add(InlineKeyboardButton(f"{row[1]} {row[2]}", callback_data=f"delete_{row[0]}"))
-
-    kb.add(InlineKeyboardButton("❌ Отмена", callback_data="cancel"))
+    kb = user_delete_keyboard(rows)
 
     await message.answer("Выберите запись для удаления:", reply_markup=kb)
 
-@dp.callback_query_handler(lambda c: c.data.startswith("delete_"))
+@router.callback_query(F.data.startswith("delete_"))
 async def delete_booking_confirm(call: CallbackQuery):
     booking_id = int(call.data.split("delete_")[1])
     user_id = call.from_user.id
@@ -393,7 +398,7 @@ async def delete_booking_confirm(call: CallbackQuery):
     else:
         await call.answer("Не удалось удалить запись", show_alert=True)
 
-@dp.message_handler(commands=['admin'])
+@router.message(Command("admin"))
 async def admin_list_bookings(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         await message.reply("⛔ У вас нет доступа к этой команде.")
@@ -422,7 +427,7 @@ async def admin_list_bookings(message: types.Message):
 
     await message.answer(text)
 
-@dp.message_handler(Command("admin_b"))
+@router.message(Command("admin_b"))
 async def view_bookings(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
@@ -448,19 +453,21 @@ async def view_bookings(message: types.Message):
                 f"👤 Пользователь: @{username}\n"
                 f"📅 Дата: {date} 🕒 Время: {time}")
 
-        kb = InlineKeyboardMarkup().add(
-            InlineKeyboardButton("❌ Удалить", callback_data=booking_cb.new(action="delete", booking_id=str(bid)))
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[[
+                InlineKeyboardButton(text="❌ Удалить", callback_data=f"booking:delete:{bid}")
+            ]]
         )
 
         await message.answer(text, reply_markup=kb)
 
-@dp.callback_query_handler(booking_cb.filter(action="delete"))
-async def delete_booking(call: CallbackQuery, callback_data: dict):
+@router.callback_query(F.data.startswith("booking:delete:"))
+async def delete_booking(call: CallbackQuery):
     if call.from_user.id != ADMIN_ID:
         await call.answer("Нет доступа", show_alert=True)
         return
 
-    booking_id = callback_data["booking_id"]
+    booking_id = call.data.split(":")[-1]
 
     conn = get_connection()
     c = conn.cursor()
@@ -486,15 +493,15 @@ def save_user(user_id):
 class BroadcastState(StatesGroup):
     waiting_for_content = State()
 
-@dp.message_handler(commands=['send_post'])
+@router.message(Command("send_post"))
 async def start_broadcast(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         await message.answer("⛔ У вас нет доступа к этой команде.")
         return
     await message.answer("✉️ Пришлите сообщение, фото или видео для рассылки:")
-    await BroadcastState.waiting_for_content.set()
+    await state.set_state(BroadcastState.waiting_for_content)
 
-@dp.message_handler(content_types=types.ContentTypes.ANY, state=BroadcastState.waiting_for_content)
+@router.message(StateFilter(BroadcastState.waiting_for_content))
 async def process_broadcast_content(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         await message.answer("⛔ Нет доступа.")
@@ -522,15 +529,16 @@ async def process_broadcast_content(message: types.Message, state: FSMContext):
             continue
 
     await message.answer(f"✅ Рассылка завершена. Успешно отправлено {sent} пользователям.")
-    await state.finish()
+    await state.clear()
 
 # === ПЕРЕСЫЛКА ВСЕХ СООБЩЕНИЙ И ФАЙЛОВ АДМИНУ ===
-@dp.message_handler(state=None)
-async def track_users(message: types.Message):
+def is_not_command(message: types.Message) -> bool:
+    return not (message.text and message.text.startswith("/"))
+
+@router.message(StateFilter(None), is_not_command)
+async def forward_all_to_admin(message: types.Message, state: FSMContext):
     save_user(message.from_user.id)
 
-@dp.message_handler(state="*", content_types=types.ContentTypes.ANY)
-async def forward_all_to_admin(message: types.Message, state: FSMContext):
     if message.from_user.id == ADMIN_ID:
         return
 
@@ -551,5 +559,9 @@ async def forward_all_to_admin(message: types.Message, state: FSMContext):
     except Exception as e:
         logging.error(f"Ошибка пересылки админу: {e}")
 
+async def main():
+    dp.include_router(router)
+    await dp.start_polling(bot)
+
 if __name__ == '__main__':
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(main())
