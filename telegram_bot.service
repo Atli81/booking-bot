@@ -1,0 +1,13 @@
+[Unit]
+Description=Telegram Bot
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/root/telegram_bot
+ExecStart=/root/myenv/bin/python3 /root/telegram_bot/bot.py
+Restart=always
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
