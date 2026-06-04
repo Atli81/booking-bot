@@ -2,42 +2,72 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Слоты услуги</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
 </head>
-<body class="bg-light">
-  <div class="container py-4">
-    <h1 class="mb-4">Слоты для услуги №{{ service_id }}</h1>
-
-    <form method="post" class="row g-3 mb-4">
-      <div class="col-md-10">
-        <input type="text" name="time_slot" class="form-control" placeholder="Например, 10:00 или 15:30" required>
+<body>
+  <main class="page">
+    <header class="topbar">
+      <div>
+        <div class="page-kicker">Слоты</div>
+        <h1>Админ-панель записи</h1>
+        <p class="muted">Услуга №{{ service_id }}</p>
       </div>
-      <div class="col-md-2">
-        <button type="submit" class="btn btn-success w-100">Добавить</button>
+      <div class="topbar-actions">
+        <a href="{{ url_for('admin_panel') }}" class="btn btn-secondary">Назад</a>
+        <a href="{{ url_for('logout') }}" class="btn btn-secondary">Выйти</a>
       </div>
-    </form>
+    </header>
 
-    <table class="table table-bordered">
-      <thead class="table-dark">
-        <tr>
-          <th>Время</th>
-          <th>Удалить</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for slot in slots %}
-        <tr>
-          <td>{{ slot[1] }}</td>
-          <td>
-            <a href="{{ url_for('delete_slot', service_id=service_id, slot_id=slot[0]) }}" class="btn btn-danger btn-sm">Удалить</a>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flash-list">
+          {% for category, message in messages %}
+            <div class="flash flash-{{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
 
-    <a href="{{ url_for('admin_panel') }}" class="btn btn-secondary mt-3">Назад</a>
-  </div>
+    <section class="card">
+      <div class="section-heading">
+        <h2>Добавить слот</h2>
+      </div>
+      <form method="post" class="form-grid form-grid-wide">
+        <label>
+          <span>Время</span>
+          <input type="text" name="time_slot" placeholder="Например, 10:00 или 15:30" required>
+        </label>
+        <button type="submit" class="btn btn-success">Добавить</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="section-heading">
+        <h2>Список слотов</h2>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Время</th>
+              <th>Удалить</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for slot in slots %}
+            <tr>
+              <td data-label="Время">{{ slot[1] }}</td>
+              <td data-label="Удалить">
+                <a href="{{ url_for('delete_slot', service_id=service_id, slot_id=slot[0]) }}" class="btn btn-danger btn-sm">Удалить</a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
 </body>
 </html>
